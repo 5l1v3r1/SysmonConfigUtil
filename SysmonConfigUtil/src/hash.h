@@ -1,6 +1,8 @@
 #ifndef _SYSMON_HASH_
 #define _SYSMON_HASH_
 
+#include <cstdint>
+
 static const wchar_t SHA1[] = L"SHA1";
 static const wchar_t MD5[] = L"MD5";
 static const wchar_t SHA256[] = L"SHA256";

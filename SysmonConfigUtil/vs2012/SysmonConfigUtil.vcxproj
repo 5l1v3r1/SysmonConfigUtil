@@ -85,6 +85,8 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <CompileAs>Default</CompileAs>
+      <ShowIncludes>false</ShowIncludes>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -140,6 +142,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\main.cpp" />
+    <ClCompile Include="..\src\rules.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\hash.h" />
