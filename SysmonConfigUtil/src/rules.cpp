@@ -3,54 +3,82 @@
 #include <stdio.h>
 #include "rules.h"
 #include "hash.h"
+#include "config.h"
 
 
 PRULES_STRUCT rule_struct_data;
 
-void parse_sysmon_rules( void *rules_buf_cpy, DWORD regValue_size )
+sysmon_configuration * parse_sysmon_rules( void *rules_buf_cpy, DWORD regValue_size )
 {
 	PRULES_STRUCT rule_struct_ptr_cpy; // esi
 	unsigned int buf_size; // edx
 	unsigned int rules_buf_ptr; // eax
 	void **rule_ptr; // esi
 	PRULE_STRUCT rule_func_ptr; // ebx
-	const wchar_t *inc_exc_str; // eax
+	const char *inc_exc_str; // eax
 	unsigned char *i; // edi
-	const wchar_t *rule_modifier_ptr; // eax
-	const wchar_t *filter_type = 0; // eax
+	const char *rule_modifier_ptr; // eax
+	const char *filter_type = 0; // eax
 	unsigned int rule_struct_arr[2] = { 0, 0 }; // [esp+18h] [ebp-230h]
 	PRULES_STRUCT rule_struct_ptr = 0; // [esp+2Ch] [ebp-21Ch]
-
-	if ( !ruleEngine(rules_buf_cpy, regValue_size) )
+	sysmon_configuration *sysmon_config_inst = nullptr;
+	char version_buf[100];
+	
+	if ( !validate_config(rules_buf_cpy, regValue_size) )
 	{
 		if ( rules_buf_cpy )
 			free((void *)rules_buf_cpy);
-		return;
+		return sysmon_config_inst;
 	}
 
 	if ( get_struct_data_wrap( &rule_struct_ptr) )
 	{
-
 		if ( get_struct_data_wrap2( rule_struct_ptr, (unsigned int *)&rule_struct_arr) )
 		{
 			if ( rule_struct_arr[1] )
 			{
-				wprintf( L"Rule configuration (version %.2f):\n",
-					((double)(unsigned __int16)rule_struct_arr[0] + 0.0) * 0.01 + (double)(rule_struct_arr[0] >> 16) + version_stuff[rule_struct_arr[0] >> 47]);
+				sysmon_config_inst = new sysmon_configuration();	
+				double *version_ptr = (double *)version_stuff;
+
+				//Initialize stuff
+				//unsigned int version_int = rule_struct_arr[0];
+				/*unsigned int version_truncated = (unsigned short)rule_struct_arr[0];
+				double final_val = version_truncated;
+				unsigned int version_short_shift = version_truncated >> 31;
+				final_val += version_ptr[version_short_shift];
+				final_val *= 0x01;
+
+				unsigned int version_int_shift = version_int >> 16;
+				double version_double_shift = (double)version_int_shift;
+				version_int_shift = version_int_shift >> 31;
+				version_double_shift += version_ptr[version_int_shift];
+				final_val += version_double_shift;*/
+				
+				double final_val = ((double)(unsigned __int16)rule_struct_arr[0] + 0.0) * 0.01 + (double)(rule_struct_arr[0] >> 16) + (double)(version_stuff[rule_struct_arr[0] >> 47]);
+				memset(version_buf, 0, 100);
+				_snprintf_s(version_buf, sizeof(version_buf), "%.2f", final_val);
+	
+//				wprintf( L"Rule configuration (version %.2f):\n",
+//					((double)(unsigned __int16)rule_struct_arr[0] + 0.0) * 0.01 + (double)(rule_struct_arr[0] >> 16) + version_stuff[rule_struct_arr[0] >> 47]);
+				
+				//Set binary version
+				sysmon_config_inst->set_binary_version(version_buf);
+
+
 				rule_struct_ptr_cpy = rule_struct_ptr;
 				buf_size = rule_struct_ptr_cpy->rule_buf_size;
 
 				if ( buf_size < 8 ){
 					if ( rules_buf_cpy )
 						free((void *)rules_buf_cpy);
-					return;
+					return nullptr;
 				}
 				rules_buf_ptr = rule_struct_ptr->rules_buf;
 
 				if ( !*(DWORD *)(rules_buf_ptr + 4) || rules_buf_ptr + 8 < rules_buf_ptr || rules_buf_ptr + 8 >= buf_size + rules_buf_ptr || rules_buf_ptr == -8 ){
 					if ( rules_buf_cpy )
 						free((void *)rules_buf_cpy);
-					return;
+					return nullptr;
 				}
 				rule_ptr = (void **)(rules_buf_ptr + 8);
 				do 
@@ -58,75 +86,98 @@ void parse_sysmon_rules( void *rules_buf_cpy, DWORD regValue_size )
 					rule_func_ptr = get_rule_func((uint32_t)*rule_ptr);
 					if ( rule_func_ptr )
 					{
+						//Create new sysmon event type
+						sysmon_event_type *new_event_type = new sysmon_event_type( (char *)rule_func_ptr->RULE_FUNC);
+
+						//Get inclue or exclude
 						inc_exc_str = check_include_exclude(rule_ptr[1]);
-						wprintf(L" - %-34s onmatch: %s\n", rule_func_ptr->RULE_FUNC, inc_exc_str);
-						for ( i = iterate_rule((unsigned char *)rule_ptr, &rule_struct_ptr, 0);
-								i;
+						new_event_type->set_onmatch( (char *)inc_exc_str);
+
+						//printf(" - %-34s onmatch: %s\n", rule_func_ptr->RULE_FUNC, inc_exc_str);
+						for ( i = iterate_rule((unsigned char *)rule_ptr, &rule_struct_ptr, 0); i;
 								i = iterate_rule((unsigned char *)rule_ptr, &rule_struct_ptr, i) )
 						{
 							int idx = *(DWORD *)i;
-							filter_type = (const wchar_t *)( (uintptr_t *)rule_func_ptr->RULE_STR_TABLE[ idx ] );
+							filter_type = (const char *)( (uintptr_t *)rule_func_ptr->RULE_STR_TABLE[ idx ] );
 							if ( *(DWORD *)i < (unsigned int)rule_func_ptr->some_int_0 	&& *filter_type )
 							{
+								//Create a new event entry
+								sysmon_event_entry *new_event_entry = new sysmon_event_entry((char *)filter_type);
 								rule_modifier_ptr = get_rule_modifier(*(i + 4));
-								wprintf(L"\t%-30s filter: %-12s value: '%s'\n", filter_type, rule_modifier_ptr, i + 16);
+								std::wstring event_val_wstr = (wchar_t *)(i + 16);
+								std::string event_val_str(event_val_wstr.begin(), event_val_wstr.end());
+
+								//Add condition
+								new_event_entry->set_condition((char *)rule_modifier_ptr);
+								new_event_entry->set_value(event_val_str);
+
+								//Add event entry to list
+								new_event_type->add_event_entry(new_event_entry);								
+
+								//printf("\t%-30s filter: %-12s value: '%s'\n", filter_type, rule_modifier_ptr, event_val_str.c_str());
 							}
 						}
+					
+						//Set the event type entry in the config map
+						sysmon_config_inst->set_event_type( new_event_type->get_name(), new_event_type );
+					
 					}
+					
 					rule_ptr = (void **)iterate_rule_type( (PRULES_STRUCT *)&rule_struct_ptr, (unsigned int*)rule_ptr);
 
 				} while ( rule_ptr );
 
-				return;
+				return sysmon_config_inst;
 			}
 		}
 	}
 		
+	return sysmon_config_inst;
 }
 
-const wchar_t *get_rule_modifier(uint32_t mod_value)
+const char *get_rule_modifier(uint32_t mod_value)
 {
-	const wchar_t *result;
+	const char *result;
 	switch ( mod_value )
 	{
 		case 1u:
-			result = L"is not";
+			result = "is not";
 			break;
 		case 2u:
-			result = L"contains";
+			result = "contains";
 			break;
 		case 3u:
-			result = L"excludes";
+			result = "excludes";
 			break;
 		case 4u:
-			result = L"begin with";
+			result = "begin with";
 			break;
 		case 5u:
-			result = L"end with";
+			result = "end with";
 			break;
 		case 6u:
-			result = L"less than";
+			result = "less than";
 			break;
 		case 7u:
-			result = L"more than";
+			result = "more than";
 			break;
 		case 8u:
-			result = L"image";
+			result = "image";
 			break;
 		default:
-			result = L"is";
+			result = "is";
 			break;
 	}
 	return result;
 }
 
-const wchar_t *check_include_exclude(void *include_bool)
+const char *check_include_exclude(void *include_bool)
 {
 	if ( !include_bool )
-		return L"exclude";
+		return "exclude";
 	if ( include_bool == (void *)1 )
-		return L"include";
-	return (const wchar_t *)"?";
+		return "include";
+	return (const char *)"?";
 }
 
 unsigned char *iterate_rule(unsigned char *rule_ptr, PRULES_STRUCT *a2, unsigned char *a3)
@@ -207,7 +258,7 @@ unsigned int iterate_rule_type( PRULES_STRUCT *a1, unsigned int *a2)
 	return result;
 }
 
-char ruleEngine(void *rules_buffer, int rule_size)
+char validate_config(void *rules_buffer, int rule_size)
 {
 	void *rules_buf_cpy; // ebx
 	PRULES_STRUCT rule_struct; // esi
@@ -226,7 +277,7 @@ char ruleEngine(void *rules_buffer, int rule_size)
 	if ( !rule_struct )
 	{
 		//dbg_msg((int)L"RuleEngine", 0xEu, (int)L"Failed to allocate memory", v7);
-		wprintf(L"RuleEngine: Failed to allocate memory");
+		printf("RuleEngine: Failed to allocate memory");
 		return 0;
 	}
 	rule_struct->some_num_idx_0 = 1;
@@ -310,7 +361,7 @@ char check_rules(PRULES_STRUCT v1)
 	unsigned int v60; // eax
 	unsigned int v61; // esi
 	unsigned int **v62; // edi
-	const wchar_t *v63; // [esp+14h] [ebp-30h]
+	const char *v63; // [esp+14h] [ebp-30h]
 	unsigned int v65; // [esp+28h] [ebp-1Ch]
 	unsigned int v66; // [esp+2Ch] [ebp-18h]
 	int v67; // [esp+2Ch] [ebp-18h]
@@ -330,16 +381,16 @@ char check_rules(PRULES_STRUCT v1)
 
 	if ( !v1 || ( v4 < 8) || ( v6 = *(unsigned int *)v5, !v5[1]) )
 	{
-		v63 = L"Invalid configuration";
+		v63 = "Invalid configuration";
 		LABEL_127:
-		wprintf(L"Invalid configuration");
+		printf("Invalid configuration");
 		//dbg_msg((int)L"RuleEngine", 0xDu, (int)v63, v64);
 		return 0;
 	}
 	if ( v6 >> 16 != 1 )
 	{
 		v7 = ((double)(unsigned __int16)v6 + 0.0) * 0.01 + (double)(v6 >> 16) + version_stuff[v6 >> 47];
-		wprintf(L"Registry rule version %.2f is incompatible with Sysmon rule version %.2f. Please rebuild your manifest.",v6, v7);
+		printf("Registry rule version %.2f is incompatible with Sysmon rule version %.2f. Please rebuild your manifest.",v6, v7);
 		return 0;
 	}
 	if ( v5 )
@@ -363,7 +414,7 @@ char check_rules(PRULES_STRUCT v1)
 			v11 = v9[1];
 			if ( v11 && v11 != 1 )
 			{
-				v63 = L"Invalid data in rules";
+				v63 = "Invalid data in rules";
 				goto LABEL_127;
 			}
 		LABEL_17:
@@ -389,7 +440,7 @@ char check_rules(PRULES_STRUCT v1)
 	v15 = v3 + 1;
 	if ( v15 > 0xFFFF || (v16 = (unsigned int **)malloc(8 * v15 + 4), (v68 = v16) == 0) )
 	{
-		wprintf(L"RuleEngine: Failed to allocate memory");
+		printf("RuleEngine: Failed to allocate memory");
 		return 0;
 	}
 	memset(v16, 0, 8 * v15 + 4);
@@ -435,7 +486,7 @@ char check_rules(PRULES_STRUCT v1)
 		LABEL_34:
 		if ( v17[2 * v22 + 1] )
 		{
-			wprintf(L"Invalid data in rules.");
+			printf("Invalid data in rules.");
 			// dbg_msg((int)L"RuleEngine", 0xDu, (int)L"Invalid data in rules", v64);
 		}
 		else
@@ -641,7 +692,7 @@ char check_rules(PRULES_STRUCT v1)
 					}
 				}
 			}
-			wprintf(L"RuleEngine: Failed to allocate memory");
+			printf("RuleEngine: Failed to allocate memory");
 		}
 		v61 = 0;
 		if ( *v68 )
@@ -761,39 +812,38 @@ PRULE_STRUCT get_rule_func( uint32_t rule_num) {
 	return (PRULE_STRUCT)&rule_arr[iterator];
 }
 
-wchar_t *resolve_hashmap(unsigned int hash_reg_val)
+char *resolve_hashmap(unsigned int hash_reg_val)
 {
 	unsigned int hash_reg_val_cpy; // edx
 	unsigned int v2; // ecx
-	rsize_t v3; // edi
+	rsize_t strlen_2; // edi
 	unsigned int v4; // ebx
 	signed int v5; // esi
-	wchar_t *ret_str; // eax
+	char *ret_str; // eax
 	unsigned int str_len; // kr00_4
-	size_t v8; // esi
-	wchar_t *new_buf; // eax
-	wchar_t *v10; // edi
+	char *new_buf; // eax
+	char *new_buf_cpy; // edi
 	unsigned int index; // esi
 	unsigned int v12; // esi
-	wchar_t *result; // eax
-	const wchar_t *v14; // eax
-	unsigned int hash_reg_val_cpy2; // [esp+0h] [ebp-24h]
-	rsize_t SizeInWords; // [esp+8h] [ebp-1Ch]
-	rsize_t SizeInWordsa; // [esp+8h] [ebp-1Ch]
-	wchar_t *Src[5]; // [esp+Ch] [ebp-18h]
+	char *result; // eax
+	const char *cur_hash; // eax
+	unsigned int hash_reg_val_cpy2; 
+	rsize_t SizeInWords; 
+	rsize_t SizeInWordsa; 
+	char *Src[5]; 
 
 	hash_reg_val_cpy = hash_reg_val;
 	hash_reg_val_cpy2 = hash_reg_val;
 	if ( (hash_reg_val & 0x80000000) == 0 )
 	{
-		if ( hash_reg_val >= 5 || (v14 = (wchar_t *)hashmap[hash_reg_val].hash_name) == 0 )
-			v14 = (const wchar_t *)"?";
-		result = _wcsdup(v14);
+		if ( hash_reg_val >= 5 || (cur_hash = (char *)hashmap[hash_reg_val].hash_name) == 0 )
+			cur_hash = (const char *)"?";
+		result = _strdup(cur_hash);
 	}
 	else
 	{
 		v2 = 1;
-		v3 = 0;
+		strlen_2 = 0;
 		v4 = 0;
 		SizeInWords = 1;
 		v5 = 2;
@@ -802,10 +852,10 @@ wchar_t *resolve_hashmap(unsigned int hash_reg_val)
 			if ( __ROR__(v5, 1) & hash_reg_val_cpy )		
 			{
 				ret_str = resolve_hashmap(v2);
-				str_len = wcslen(ret_str);
+				str_len = strlen(ret_str);
 				hash_reg_val_cpy = hash_reg_val_cpy2;
-				Src[v4] = (wchar_t *)ret_str;
-				v3 += str_len + 1;
+				Src[v4] = (char *)ret_str;
+				strlen_2 += str_len + 1;
 				v2 = SizeInWords;
 				++v4;
 			}
@@ -814,22 +864,23 @@ wchar_t *resolve_hashmap(unsigned int hash_reg_val)
 			SizeInWords = v2;
 		}
 		while ( v2 < 5 );
-		v8 = 2 * v3;
-		SizeInWordsa = v3;
-		new_buf = (wchar_t *)malloc(2 * v3);
-		v10 = new_buf;
+
+		SizeInWordsa = strlen_2;
+		new_buf = (char *)malloc( strlen_2 );
+		new_buf_cpy = new_buf;
 		if ( new_buf )
 		{
-			memset(new_buf, 0, v8);
+			memset(new_buf, 0, strlen_2);
 			index = 0;
 			if ( v4 )
 			{
-				while ( (!index || !wcscat_s(v10, SizeInWordsa, L",")) && !wcscat_s(v10, SizeInWordsa, Src[index]) )
+				while ( (!index || !strncat_s(new_buf_cpy, strlen_2, ",", SizeInWordsa)) && 
+					!strncat_s(new_buf_cpy, strlen_2, Src[index], SizeInWordsa ) )
 				{
 					if ( ++index >= v4 )
-					goto LABEL_14;
+						goto LABEL_14;
 				}
-				*v10 = 0;
+				*new_buf_cpy = 0;
 			}
 		}
 		LABEL_14:
@@ -840,7 +891,7 @@ wchar_t *resolve_hashmap(unsigned int hash_reg_val)
 				free(Src[v12++]);
 			while ( v12 < v4 );
 		}
-		result = v10;
+		result = new_buf_cpy;
 	}
 	return result;
 }

@@ -3,10 +3,10 @@
 
 #include <cstdint>
 
-static const wchar_t SHA1[] = L"SHA1";
-static const wchar_t MD5[] = L"MD5";
-static const wchar_t SHA256[] = L"SHA256";
-static const wchar_t IMPHASH[] = L"IMPHASH";
+static const char SHA1[] = "SHA1";
+static const char MD5[] =  "MD5";
+static const char SHA256[] = "SHA256";
+static const char IMPHASH[] = "IMPHASH";
 
 /*
  * Struct for the hashes
