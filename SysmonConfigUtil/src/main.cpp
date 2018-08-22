@@ -71,20 +71,22 @@ void __cdecl main(int argc, char *argv[]){
 
 	if( sysmon_struct != NULL ){
 
-		//Initialize COM
-		::CoInitialize(NULL);
-
 		//Parse the config buffer
 		sysmon_configuration *sysmon_config = parse_sysmon_rules( (void *)sysmon_struct->sysmon_rules, sysmon_struct->sysmon_rules_size );
 		
-		//Set the hash
-		char *ret_buf = resolve_hashmap(sysmon_struct->sysmon_hash);
-		sysmon_config->set_hash_algorithms(ret_buf);
-		free(ret_buf);
-
-		//Convert to XML
-		std::string xml_str = sysmon_config->toXml();
-		puts(xml_str.c_str());
+		//Initialize COM
+		::CoInitialize(NULL);
+		
+		if( sysmon_config != nullptr ){
+			//Set the hash
+			char *ret_buf = resolve_hashmap(sysmon_struct->sysmon_hash);
+			sysmon_config->set_hash_algorithms(ret_buf);
+			free(ret_buf);
+			
+			//Convert to XML
+			std::string xml_str = sysmon_config->toXml();
+			puts(xml_str.c_str());
+		}
 
 		//Free memory
 		if( sysmon_struct->sysmon_rules)
@@ -98,7 +100,7 @@ void __cdecl main(int argc, char *argv[]){
 }
 
 void print_usage(){
-	wprintf(L"Usage: sysmon_util <options>\n\t-h\tUsage\n\t-f\tFile path of sysmon configuration from registry\n\t-a\tRegistry dump is ASCII hex format\n\n");
+	wprintf(L"Usage: sysmon_util <options>\n\t-h\tUsage\n\t-f\tFile path of dumped binary sysmon rules from registry\n\t-a\tBinary dump is ASCII hex format\n\n");
 }
 
 PSYSMON_CONFIG_STRUCT read_sysmon_reg_file( char *file_path, boolean ascii_hex ){

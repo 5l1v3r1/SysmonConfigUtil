@@ -5,8 +5,8 @@
 
 sysmon_configuration::~sysmon_configuration(){
 
-	for (auto i = event_type_map.begin(); i != event_type_map.end(); i++) {
-        sysmon_event_type *an_evt_type = (sysmon_event_type *)i->second;
+	for (auto i = event_type_list.begin(); i != event_type_list.end(); i++) {
+        sysmon_event_type *an_evt_type = (sysmon_event_type *)*i;
 		if( an_evt_type != nullptr )
 			delete an_evt_type;
     }
@@ -23,7 +23,6 @@ sysmon_event_type::~sysmon_event_type(){
 
 };
 
-
 //Output the XML based on the schema
 std::string sysmon_configuration::toXml(){
 
@@ -34,12 +33,16 @@ std::string sysmon_configuration::toXml(){
     HRESULT hr = pXMLDoc.CreateInstance(__uuidof(MSXML2::DOMDocument60));
     if(FAILED(hr)){
 		printf("Failed to create the XML class instance");
+		//Uninitialize COM
+		::CoUninitialize();
         return retStr;
     }
 
     if(pXMLDoc->loadXML("<Sysmon></Sysmon>") == VARIANT_FALSE){
         printf("MSXML::DomDocument::load failed. \n");
 		printf("Error: %s", pXMLDoc->parseError->Getreason().GetBSTR());
+		//Uninitialize COM
+		::CoUninitialize();
         return retStr;
     }
 
@@ -58,17 +61,21 @@ std::string sysmon_configuration::toXml(){
 
 	//Add hash algorithm node 
     MSXML2::IXMLDOMElementPtr hash_algo_node = pXMLDoc->createElement("HashAlgorithms");
+	std::string hash_str; 
+	if( hash_algorithms_node.compare("?") == 0)
+		hash_algorithms_node.assign("MD5,SHA1,IMPHASH");	
+
 	hash_algo_node->Puttext(hash_algorithms_node.c_str());  
-    hash_algo_node = pXMLRootElem->appendChild(hash_algo_node);
+	hash_algo_node = pXMLRootElem->appendChild(hash_algo_node);
 
 	//Add event types
     MSXML2::IXMLDOMElementPtr event_filtering_node = pXMLDoc->createElement("EventFiltering");
     event_filtering_node = pXMLRootElem->appendChild(event_filtering_node);
 
 	//Loop through map and add each
-	for (auto i = event_type_map.begin(); i != event_type_map.end(); i++) {
+	for (auto i = event_type_list.begin(); i != event_type_list.end(); i++) {
 
-		sysmon_event_type *an_evt_type = (sysmon_event_type *)i->second;
+		sysmon_event_type *an_evt_type = (sysmon_event_type *)*i;
 	
 		//Add event type
 		MSXML2::IXMLDOMElementPtr event_type_node = pXMLDoc->createElement( an_evt_type->get_name().c_str());
@@ -94,5 +101,6 @@ std::string sysmon_configuration::toXml(){
 	}
 
 	retStr = pXMLDoc->Getxml();
+
 	return retStr;
 }

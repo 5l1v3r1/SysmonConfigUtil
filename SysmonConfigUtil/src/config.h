@@ -75,9 +75,9 @@ public:
 	std::string get_binary_version(){ return binary_version; };
 	void set_binary_version(std::string passed_str ) {  binary_version = passed_str; };
 
-	std::unordered_map<std::string, sysmon_event_type *> get_event_types(){ return event_type_map; };
-	sysmon_event_type *get_event_type( std::string event_type_str ){ return event_type_map[event_type_str]; };
-	void set_event_type( std::string event_type_str, sysmon_event_type *event_type_inst ){ event_type_map[event_type_str] = event_type_inst; };
+	std::vector<sysmon_event_type *> get_event_types(){ return event_type_list; };
+	//sysmon_event_type *get_event_type( std::string event_type_str ){ return event_type_map[event_type_str]; };
+	void add_event_type( sysmon_event_type *event_type_inst ){ event_type_list.push_back( event_type_inst); };
 
 	//Output the data to XML
 	std::string toXml();
@@ -88,7 +88,7 @@ private:
 	//Internal data
 	std::string hash_algorithms_node;
 	std::string binary_version;
-	std::unordered_map<std::string, sysmon_event_type *> event_type_map;
+	std::vector<sysmon_event_type *> event_type_list;
 
 };
 
