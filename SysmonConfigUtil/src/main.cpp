@@ -45,6 +45,7 @@ void __cdecl main(int argc, char *argv[]){
 
 	PSYSMON_CONFIG_STRUCT sysmon_struct = nullptr;
 	char* rules_file_path = nullptr;
+	char* target_host = nullptr;
 	boolean ascii_hex = false;
 	if (argc > 0) { // Check the value of argc. If not enough parameters have been passed, inform user and exit.
 
@@ -52,6 +53,9 @@ void __cdecl main(int argc, char *argv[]){
 			char *cur_arg = argv[i];
             if ( strcmp(cur_arg, "-f") == 0 && (i + 1 != argc)) {
                rules_file_path = argv[i + 1];
+			   i++;
+			} else if ( strcmp(cur_arg, "-t") == 0 && (i + 1 != argc)) {
+               target_host = argv[i + 1];
 			   i++;
             } else if ( strcmp(cur_arg, "-a") == 0) {
                 ascii_hex = true;
@@ -66,7 +70,7 @@ void __cdecl main(int argc, char *argv[]){
 	if( rules_file_path != nullptr )
 		sysmon_struct = read_sysmon_reg_file( rules_file_path, ascii_hex );		
     else
-		sysmon_struct = read_reg_values(); 
+		sysmon_struct = read_reg_values( target_host ); 
 	
 
 	if( sysmon_struct != NULL ){
@@ -103,14 +107,14 @@ void print_usage(){
 	wprintf(L"Usage: sysmon_util <options>\n\t-h\tUsage\n\t-f\tFile path of dumped binary sysmon rules from registry\n\t-a\tBinary dump is ASCII hex format\n\n");
 }
 
-PSYSMON_CONFIG_STRUCT read_sysmon_reg_file( char *file_path, boolean ascii_hex ){
+PSYSMON_CONFIG_STRUCT read_sysmon_reg_file( std::string file_path, boolean ascii_hex ){
 
 	FILE * pFile;
 	long lSize;
 	char * buffer;
 	size_t result;
 
-	fopen_s( &pFile, file_path, "rb" );
+	fopen_s( &pFile, file_path.c_str(), "rb" );
 	if (pFile==NULL) { fputs ("[-] File error",stderr); return nullptr;}
 
 	// obtain file size:
@@ -166,7 +170,55 @@ PSYSMON_CONFIG_STRUCT read_sysmon_reg_file( char *file_path, boolean ascii_hex )
 
 }
 
-PSYSMON_CONFIG_STRUCT read_reg_values(){
+std::string GetLastErrorAsString( DWORD err ){
+
+    if(err == 0)
+        return std::string(); //No error message has been recorded
+
+    LPSTR messageBuffer = nullptr;
+	DWORD dwFlags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+    size_t size = FormatMessageA(dwFlags, NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
+
+    std::string message(messageBuffer, size);
+
+    //Free the buffer.
+    LocalFree(messageBuffer);
+
+    return message;
+}
+
+void stop_remote_registry_svc( SC_HANDLE sc ){
+
+	SERVICE_STATUS_PROCESS ssp;
+	DWORD retVal = ControlService( sc, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS) &ssp );
+	if ( !retVal ){
+		printf( "ControlService failed (%d)\n", GetLastError() );
+	}
+    CloseServiceHandle(sc);
+
+}
+
+SC_HANDLE start_remote_registry_svc(SC_HANDLE sc, std::string target){
+
+	if( !sc ) return NULL;
+
+	SC_HANDLE svc = OpenService(sc, "RemoteRegistry", SERVICE_START | SERVICE_STOP);
+	if( !svc ) {
+		printf("error OpenService: %s\n", GetLastErrorAsString( GetLastError()).c_str() );
+		return NULL;
+	}
+
+	BOOL ret = StartService(svc, NULL, NULL);
+	if( ret == FALSE ) {
+		printf("error StartServiceA: %s\n", GetLastErrorAsString( GetLastError()).c_str() );
+		CloseServiceHandle(svc);
+		return NULL;
+	}
+
+	return svc;
+}
+
+PSYSMON_CONFIG_STRUCT read_reg_values( std::string target ){
 
 	LSTATUS ret_val;
 	BYTE reg_options_val[4];
@@ -180,6 +232,39 @@ PSYSMON_CONFIG_STRUCT read_reg_values(){
 	DWORD reg_hash_val = 1;
 	unsigned char *rules_buf_cpy = nullptr;
 	memset(&SubKey, 0, sizeof(SubKey));
+	SC_HANDLE reg_svc = NULL;
+
+	//Connect to the registry remotely
+	if( !target.empty() ){
+		std::string conn = "\\\\" + target;
+		LONG ret = RegConnectRegistry(conn.c_str(), HKEY_LOCAL_MACHINE, &phkResult);
+
+		//Attempt to start the remote registry service if it is not running
+		if( ret == ERROR_BAD_NETPATH ){
+			//open service control manager
+			SC_HANDLE sc = OpenSCManager(target.c_str(), NULL, SC_MANAGER_ENUMERATE_SERVICE);
+			if(sc == NULL) {
+				printf("error OpenSCManager: %s\n", GetLastErrorAsString(GetLastError()).c_str());
+				return nullptr;
+			}
+
+			//Start the service
+			reg_svc = start_remote_registry_svc(sc, target);
+			if( reg_svc != NULL ){
+				//Try again
+				ret = RegConnectRegistry(conn.c_str(), HKEY_LOCAL_MACHINE, &phkResult);
+			}
+		}
+
+		if(ret != ERROR_SUCCESS) {
+			printf("Failed to connect to the remote registry, error %d\n", ret);
+			//Stop the remote registry svc if we started it
+			if( reg_svc != NULL )
+				stop_remote_registry_svc(reg_svc);	
+			return nullptr;
+		}
+	}
+
 
 	_snprintf_s(SubKey, 0x104u, "System\\CurrentControlSet\\Services\\%s\\Parameters", ServiceName);
 	ret_val = RegOpenKeyEx(HKEY_LOCAL_MACHINE, (LPCSTR)&SubKey, 0, 0x20019u, &phkResult);
@@ -200,10 +285,16 @@ PSYSMON_CONFIG_STRUCT read_reg_values(){
 		if ( ret_val ) {
 			if ( ret_val != 2 ){
 				printf("Failed to open %s configuration with last error %d\n", "Options", ret_val);
+				//Stop the remote registry svc if we started it
+				if( reg_svc != NULL )
+					stop_remote_registry_svc(reg_svc);	
 				return nullptr;
 			}
 		} else if ( reg_val_type != 4 ){
 			printf("[-] Failed to open %s configuration with incorrect type %d / %d\n", "Options", reg_val_type, 4);
+			//Stop the remote registry svc if we started it
+			if( reg_svc != NULL )
+				stop_remote_registry_svc(reg_svc);	
 			return nullptr;
 		} else {
 			sysmon_config->sysmon_options = (DWORD)reg_options_val;
@@ -216,11 +307,17 @@ PSYSMON_CONFIG_STRUCT read_reg_values(){
 			
 			if ( ret_val != 2 ){
 				printf("[-] Failed to open %s configuration with last error %d\n", "HashingAlgorithm", ret_val);
+				//Stop the remote registry svc if we started it
+				if( reg_svc != NULL )
+					stop_remote_registry_svc(reg_svc);	
 				return nullptr;
 			}
 
 		} else if ( reg_val_type != 4 ) {
 			printf("[-] Failed to open %s configuration with incorrect type %d / %d\n", "HashingAlgorithm", reg_val_type, 4);
+			//Stop the remote registry svc if we started it
+			if( reg_svc != NULL )
+				stop_remote_registry_svc(reg_svc);	
 			return nullptr;
 		} else {
 			sysmon_config->sysmon_hash = (DWORD)reg_hash_val;
@@ -252,6 +349,9 @@ PSYSMON_CONFIG_STRUCT read_reg_values(){
 				if ( !ret_val ){
 					sysmon_config->sysmon_rules = (uintptr_t)rules_buf;
 					sysmon_config->sysmon_rules_size = reg_val_size;	
+					//Stop the remote registry svc if we started it
+					if( reg_svc != NULL )
+						stop_remote_registry_svc(reg_svc);	
 					return sysmon_config;
 				}			
 			}
@@ -278,7 +378,11 @@ PSYSMON_CONFIG_STRUCT read_reg_values(){
 	//Free sysmon struct
 	if ( sysmon_config )
 		free((void *)sysmon_config);	
-	
+
+	//Stop the remote registry svc if we started it
+	if( reg_svc != NULL )
+		stop_remote_registry_svc(reg_svc);	
+
 	return NULL;
 
 }
