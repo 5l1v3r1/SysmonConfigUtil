@@ -45,7 +45,7 @@ void __cdecl main(int argc, char *argv[]){
 
 	PSYSMON_CONFIG_STRUCT sysmon_struct = nullptr;
 	char* rules_file_path = nullptr;
-	char* target_host = nullptr;
+	char* target_host = "";
 	boolean ascii_hex = false;
 	if (argc > 0) { // Check the value of argc. If not enough parameters have been passed, inform user and exit.
 
